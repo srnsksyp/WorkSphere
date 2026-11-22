@@ -1,4 +1,4 @@
-import { createHash, createHmac } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { emitWebhookEvent } from "@/lib/webhooks/deliver";
@@ -6,7 +6,6 @@ import { notifyNextInWaitlist } from "@/lib/waitlist";
 import { publishVenueAvailability } from "@/lib/reservations/event-bus";
 import { releaseDeskReservation } from "@/lib/reservations/deskReservationCountdown";
 import { dispatchVenueCancellationDiscordNotification } from "@/lib/notifications/discordNotifier";
-import { safeCompareSignatures } from "@/lib/security/hmac";
 
 const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
 const ACTIVE_BOOKING_STATUSES = ["CONFIRMED", "PENDING", "CHECKED_IN"] as const;
@@ -29,12 +28,14 @@ function verifySignature(
   if (!signatureHeader) return false;
 
   const signature = signatureHeader.trim().replace(/^sha256=/i, "");
+  if (!/^[a-f0-9]{64}$/i.test(signature)) return false;
 
   const expected = createHmac("sha256", secret)
     .update(rawBody, "utf8")
-    .digest("hex");
+    .digest();
+  const received = Buffer.from(signature, "hex");
 
-  return safeCompareSignatures(signature, expected);
+  return received.length === expected.length && timingSafeEqual(received, expected);
 }
 
 function payloadDigest(rawBody: string): string {
